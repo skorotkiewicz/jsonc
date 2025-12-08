@@ -1,0 +1,14 @@
+{
+  "example": "value",
+  "number": 42,
+  "enabled": [
+    "yes",
+    "maybe",
+    "/dev/tvdev"
+  ],
+  "settings": {
+    "option1": true,
+    "option2": false,
+    "option3": null
+  }
+}
