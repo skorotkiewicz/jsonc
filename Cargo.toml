@@ -1,6 +1,6 @@
 [package]
 name = "jsonc"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "JSON with Comments editor - Edit JSON files with comments"
 authors = ["mod"]
