@@ -1,10 +1,9 @@
 use clap::Parser;
 use regex::Regex;
-use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process::{self};
 use tempfile::NamedTempFile;
 
 const DEFAULT_TEMPLATE: &str = r#"{
@@ -71,16 +70,8 @@ fn edit_json(json_path: &Path) -> io::Result<()> {
     let initial_mtime = fs::metadata(&temp_path).and_then(|m| m.modified()).ok();
 
     // 3. Open Editor (Blocking)
-    let editor = env::var("EDITOR").unwrap_or_else(|_| "nano".to_string());
-    
-    let status = Command::new(&editor)
-        .arg(&temp_path)
-        .status()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to open editor '{}': {}", editor, e)))?;
-
-    if !status.success() {
-        eprintln!("Editor exited with error status");
-    }
+    edit::edit_file(&temp_path)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("Failed to open editor: {}", e)))?;
 
     // 4. Check for Save (Abort if new file wasn't saved)
     let final_mtime = fs::metadata(&temp_path).and_then(|m| m.modified()).ok();
