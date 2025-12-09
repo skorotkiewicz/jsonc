@@ -19,19 +19,19 @@ jobs:
           # Linux
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: crier
-            asset_name: crier-linux-x86_64
+            artifact_name: jsonc
+            asset_name: jsonc-linux-x86_64
 
           # macOS
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: crier
-            asset_name: crier-macos-x86_64
+            artifact_name: jsonc
+            asset_name: jsonc-macos-x86_64
             
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: crier
-            asset_name: crier-macos-arm64
+            artifact_name: jsonc
+            asset_name: jsonc-macos-arm64
 
     steps:
     - name: Checkout code
