@@ -33,6 +33,12 @@ jobs:
             artifact_name: jsonc
             asset_name: jsonc-macos-arm64
 
+          # Windows
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: jsonc.exe
+            asset_name: jsonc-windows-x86_64
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -51,10 +57,12 @@ jobs:
       run: cargo build --release --target ${{ matrix.target }}
 
     - name: Strip binary (Unix)
+      if: runner.os != 'Windows'
       run: |
         strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
 
     - name: Create archive (Unix)
+      if: runner.os != 'Windows'
       run: |
         mkdir -p artifacts
         cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} artifacts/
@@ -62,12 +70,23 @@ jobs:
         cp LICENSE artifacts/ 2>/dev/null || echo "LICENSE file not found, skipping"
         tar -czf ${{ matrix.asset_name }}.tar.gz -C artifacts .
 
+    - name: Create archive (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path artifacts
+        Copy-Item "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -Destination artifacts/
+        Copy-Item README.md -Destination artifacts/
+        if (Test-Path LICENSE) { Copy-Item LICENSE -Destination artifacts/ }
+        Compress-Archive -Path artifacts/* -DestinationPath "${{ matrix.asset_name }}.zip"
+
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.asset_name }}
         path: |
           ${{ matrix.asset_name }}.tar.gz
+          ${{ matrix.asset_name }}.zip
         if-no-files-found: ignore
 
   test:
