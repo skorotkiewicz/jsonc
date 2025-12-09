@@ -12,9 +12,8 @@ A robust Rust tool to edit JSON files with comments. It allows you to maintain a
 ## Usage
 
 ```bash
-# If the file doesn't exist, it creates one (with a default template)
-jsonc new_config.json
-
+# Edit a JSON file (preserving comments in a hidden or side-by-side .jsonc file)
+jsonc config.json
 
 # View the clean JSON output
 cat config.json
