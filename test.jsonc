@@ -2,12 +2,12 @@
   // lol
   // Add your configuration here
   "example": "value",
-  "number": 42,
+  //"number": 42,
   "enabled": [
     "yes",
     //"no",
-    "maybe",
-    "/dev/tvdev"
+    "maybe"
+    //"/dev/tvdev"
   ],
   "settings": {
     // this is a comment
