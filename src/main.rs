@@ -140,12 +140,24 @@ fn strip_comments(text: &str) -> io::Result<String> {
     let mut escaped = false;
     let mut in_line_comment = false;
     let mut in_block_comment = false;
+    let mut line_start = 0;
+    let mut remove_commented_line = false;
 
     while let Some(c) = chars.next() {
         if in_line_comment {
-            if c == '\n' || c == '\r' {
-                result.push(c);
+            if c == '\r' || c == '\n' {
+                if !remove_commented_line {
+                    result.push(c);
+                }
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                    if !remove_commented_line {
+                        result.push('\n');
+                    }
+                }
                 in_line_comment = false;
+                remove_commented_line = false;
+                line_start = result.len();
             }
             continue;
         }
@@ -156,6 +168,7 @@ fn strip_comments(text: &str) -> io::Result<String> {
                 in_block_comment = false;
             } else if c == '\n' || c == '\r' {
                 result.push(c);
+                line_start = result.len();
             }
             continue;
         }
@@ -177,6 +190,12 @@ fn strip_comments(text: &str) -> io::Result<String> {
             in_string = true;
         } else if c == '/' && chars.peek() == Some(&'/') {
             chars.next();
+            remove_commented_line = result[line_start..]
+                .chars()
+                .all(|character| character == ' ' || character == '\t');
+            if remove_commented_line {
+                result.truncate(line_start);
+            }
             in_line_comment = true;
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
@@ -186,6 +205,9 @@ fn strip_comments(text: &str) -> io::Result<String> {
             in_block_comment = true;
         } else {
             result.push(c);
+            if c == '\n' || c == '\r' {
+                line_start = result.len();
+            }
         }
     }
 
@@ -204,14 +226,17 @@ mod tests {
     use super::{clean_json_content, strip_comments};
 
     #[test]
-    fn clean_json_preserves_formatting_except_comments() {
+    fn clean_json_removes_full_line_comments_without_blank_lines() {
         let jsonc = concat!(
             "{\n",
             "\t\"name\": \"example\",\n",
             "\t\"scripts\": {\n",
             "\t\t\"dev\": \"vite dev\",\n",
-            "\t\t// \"test\": \"bun test\",\n",
-            "\t\t\"build\": \"vite build\"\n",
+            "\t\t// \"build\": \"vite build\",\n",
+            "\t\t\"preview\": \"vite preview\",\n",
+            "\t\t\"prepare\": \"prepare\",\n",
+            "\t\t//\"check\": \"check\",\n",
+            "\t\t\"check:watch\": \"check --watch\"\n",
             "\t}\n",
             "}\n",
         );
@@ -220,8 +245,9 @@ mod tests {
             "\t\"name\": \"example\",\n",
             "\t\"scripts\": {\n",
             "\t\t\"dev\": \"vite dev\",\n",
-            "\t\t\n",
-            "\t\t\"build\": \"vite build\"\n",
+            "\t\t\"preview\": \"vite preview\",\n",
+            "\t\t\"prepare\": \"prepare\",\n",
+            "\t\t\"check:watch\": \"check --watch\"\n",
             "\t}\n",
             "}\n",
         );
