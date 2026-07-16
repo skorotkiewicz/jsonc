@@ -144,6 +144,8 @@ fn strip_comments(text: &str) -> io::Result<String> {
     let mut remove_commented_line = false;
     let mut block_comment_indent: Option<String> = None;
     let mut pending_block_indent: Option<String> = None;
+    let mut block_opening_indent = String::new();
+    let mut multiline_inline_block = false;
 
     while let Some(c) = chars.next() {
         if in_line_comment {
@@ -168,10 +170,23 @@ fn strip_comments(text: &str) -> io::Result<String> {
             if c == '*' && chars.peek() == Some(&'/') {
                 chars.next();
                 in_block_comment = false;
-                pending_block_indent = block_comment_indent.take();
-            } else if block_comment_indent.is_none() && (c == '\n' || c == '\r') {
+                pending_block_indent = block_comment_indent.take().or_else(|| {
+                    multiline_inline_block.then(|| std::mem::take(&mut block_opening_indent))
+                });
+                multiline_inline_block = false;
+            } else if block_comment_indent.is_none()
+                && !multiline_inline_block
+                && (c == '\n' || c == '\r')
+            {
+                let trimmed_len = result.trim_end_matches([' ', '\t']).len();
+                result.truncate(trimmed_len);
                 result.push(c);
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                    result.push('\n');
+                }
                 line_start = result.len();
+                multiline_inline_block = true;
             }
             continue;
         }
@@ -219,6 +234,10 @@ fn strip_comments(text: &str) -> io::Result<String> {
             in_line_comment = true;
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
+            block_opening_indent = result[line_start..]
+                .chars()
+                .take_while(|character| *character == ' ' || *character == '\t')
+                .collect();
             let starts_on_own_line = result[line_start..]
                 .chars()
                 .all(|character| character == ' ' || character == '\t');
@@ -236,6 +255,7 @@ fn strip_comments(text: &str) -> io::Result<String> {
                     result.push(' ');
                 }
             }
+            multiline_inline_block = false;
             in_block_comment = true;
         } else {
             result.push(c);
@@ -310,6 +330,21 @@ mod tests {
             "  }\n",
             "}\n",
         );
+
+        assert_eq!(clean_json_content(jsonc).unwrap(), expected);
+    }
+
+    #[test]
+    fn clean_json_collapses_multiline_block_comments_between_tokens() {
+        let jsonc = concat!(
+            "{ /*\n",
+            "  \"settings\": {\n",
+            "    \"option1\": true,\n",
+            "    \"option2\": false,\n",
+            "    \"option3\": null\n",
+            "  }*/}\n",
+        );
+        let expected = "{\n}\n";
 
         assert_eq!(clean_json_content(jsonc).unwrap(), expected);
     }
