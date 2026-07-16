@@ -142,6 +142,8 @@ fn strip_comments(text: &str) -> io::Result<String> {
     let mut in_block_comment = false;
     let mut line_start = 0;
     let mut remove_commented_line = false;
+    let mut block_comment_indent: Option<String> = None;
+    let mut pending_block_indent: Option<String> = None;
 
     while let Some(c) = chars.next() {
         if in_line_comment {
@@ -166,11 +168,29 @@ fn strip_comments(text: &str) -> io::Result<String> {
             if c == '*' && chars.peek() == Some(&'/') {
                 chars.next();
                 in_block_comment = false;
-            } else if c == '\n' || c == '\r' {
+                pending_block_indent = block_comment_indent.take();
+            } else if block_comment_indent.is_none() && (c == '\n' || c == '\r') {
                 result.push(c);
                 line_start = result.len();
             }
             continue;
+        }
+
+        if pending_block_indent.is_some() {
+            if c == ' ' || c == '\t' {
+                continue;
+            }
+            if c == '\r' || c == '\n' {
+                if c == '\r' && chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                pending_block_indent = None;
+                line_start = result.len();
+                continue;
+            }
+
+            let indent = pending_block_indent.take().unwrap();
+            result.push_str(&indent);
         }
 
         if in_string {
@@ -199,9 +219,23 @@ fn strip_comments(text: &str) -> io::Result<String> {
             in_line_comment = true;
         } else if c == '/' && chars.peek() == Some(&'*') {
             chars.next();
-            // A block comment acts as whitespace, so keep tokens on either
-            // side from being joined into a different value.
-            result.push(' ');
+            let starts_on_own_line = result[line_start..]
+                .chars()
+                .all(|character| character == ' ' || character == '\t');
+            if starts_on_own_line {
+                block_comment_indent = Some(result[line_start..].to_owned());
+                result.truncate(line_start);
+            } else {
+                // An inline block comment acts as whitespace. Add a separator
+                // only when the existing prefix does not already provide one.
+                let has_separator = result
+                    .chars()
+                    .next_back()
+                    .is_some_and(|character| matches!(character, ' ' | '\t' | '\r' | '\n'));
+                if !has_separator {
+                    result.push(' ');
+                }
+            }
             in_block_comment = true;
         } else {
             result.push(c);
@@ -251,6 +285,39 @@ mod tests {
             "\t}\n",
             "}\n",
         );
+
+        assert_eq!(clean_json_content(jsonc).unwrap(), expected);
+    }
+
+    #[test]
+    fn clean_json_collapses_standalone_multiline_block_comments() {
+        let jsonc = concat!(
+            "{\n",
+            "  \"name\": \"vending-operations-portal\",\n",
+            "  /*\"private\": true,\n",
+            "  \"version\": \"0.0.1\",\n",
+            "  \"type\": \"module\",\n",
+            "  */ \"scripts\": {\n",
+            "    \"dev\": \"vite dev\"\n",
+            "  }\n",
+            "}\n",
+        );
+        let expected = concat!(
+            "{\n",
+            "  \"name\": \"vending-operations-portal\",\n",
+            "  \"scripts\": {\n",
+            "    \"dev\": \"vite dev\"\n",
+            "  }\n",
+            "}\n",
+        );
+
+        assert_eq!(clean_json_content(jsonc).unwrap(), expected);
+    }
+
+    #[test]
+    fn inline_block_comments_preserve_surrounding_content() {
+        let jsonc = "{\r\n  \"enabled\": /* explanation */ true\r\n}\r\n";
+        let expected = "{\r\n  \"enabled\":  true\r\n}\r\n";
 
         assert_eq!(clean_json_content(jsonc).unwrap(), expected);
     }
