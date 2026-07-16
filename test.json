@@ -1,9 +1,9 @@
 {
+  "example": "value",
   "enabled": [
     "yes",
     "maybe"
   ],
-  "example": "value",
   "settings": {
     "option1": true,
     "option2": false,
