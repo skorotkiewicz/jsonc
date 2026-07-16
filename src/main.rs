@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{self};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempPath};
 
 const DEFAULT_TEMPLATE: &str = r#"{
   // Add your configuration here
@@ -73,8 +73,12 @@ fn edit_json(json_path: &Path) -> io::Result<()> {
     let initial_mtime = fs::metadata(&temp_path).and_then(|m| m.modified()).ok();
 
     // 3. Open Editor (Blocking)
-    edit::edit_file(&temp_path)
-        .map_err(|e| io::Error::other(format!("Failed to open editor: {}", e)))?;
+    if let Err(error) = edit::edit_file(&temp_path) {
+        return Err(preserve_edits(
+            temp_path_obj,
+            io::Error::other(format!("Failed to open editor: {}", error)),
+        ));
+    }
 
     // 4. Check for Save (Abort if new file wasn't saved)
     let final_mtime = fs::metadata(&temp_path).and_then(|m| m.modified()).ok();
@@ -84,17 +88,25 @@ fn edit_json(json_path: &Path) -> io::Result<()> {
         return Ok(());
     }
 
-    // 5. Save/Sync
-    // Read temp file
-    let new_content = fs::read_to_string(&temp_path)?;
+    // 5. Save/Sync. Keep the working copy if any part of saving fails so the
+    // user's editing session can be recovered.
+    let save_result = (|| -> io::Result<(bool, bool)> {
+        let new_content = fs::read_to_string(&temp_path)?;
+        let clean_json = clean_json_content(&new_content)?;
 
-    let clean_json = clean_json_content(&new_content)?;
+        // Write to .jsonc (With comments)
+        let jsonc_changed = write_if_changed(&jsonc_path, &new_content)?;
 
-    // Write to .jsonc (With comments)
-    let jsonc_changed = write_if_changed(&jsonc_path, &new_content)?;
+        // Write to .json (Clean)
+        let json_changed = write_if_changed(json_path, &clean_json)?;
 
-    // Write to .json (Clean)
-    let json_changed = write_if_changed(json_path, &clean_json)?;
+        Ok((jsonc_changed, json_changed))
+    })();
+
+    let (jsonc_changed, json_changed) = match save_result {
+        Ok(changes) => changes,
+        Err(error) => return Err(preserve_edits(temp_path_obj, error)),
+    };
 
     if is_new_file {
         println!(
@@ -142,6 +154,27 @@ fn write_if_changed(path: &Path, content: &str) -> io::Result<bool> {
     }
 }
 
+fn preserve_edits(temp_path: TempPath, error: io::Error) -> io::Error {
+    let error_kind = error.kind();
+    let path = temp_path.to_path_buf();
+
+    match temp_path.keep() {
+        Ok(path) => io::Error::new(
+            error_kind,
+            format!("{}. Edits preserved at {}", error, path.display()),
+        ),
+        Err(persist_error) => io::Error::new(
+            error_kind,
+            format!(
+                "{}. Failed to preserve edits at {}: {}",
+                error,
+                path.display(),
+                persist_error
+            ),
+        ),
+    }
+}
+
 fn clean_json_content(text: &str) -> io::Result<String> {
     let stripped = strip_comments(text)?;
 
@@ -153,11 +186,17 @@ fn clean_json_content(text: &str) -> io::Result<String> {
 }
 
 fn get_jsonc_path(json_path: &Path) -> PathBuf {
-    let path_str = json_path.to_string_lossy();
-    if path_str.ends_with(".json") {
-        PathBuf::from(path_str.replace(".json", ".jsonc"))
+    if json_path.file_name().is_some_and(|name| name == ".json") {
+        json_path.with_file_name(".jsonc")
+    } else if json_path
+        .extension()
+        .is_some_and(|extension| extension == "json")
+    {
+        json_path.with_extension("jsonc")
     } else {
-        PathBuf::from(format!("{}.jsonc", path_str))
+        let mut jsonc_path = json_path.as_os_str().to_os_string();
+        jsonc_path.push(".jsonc");
+        PathBuf::from(jsonc_path)
     }
 }
 
@@ -306,8 +345,12 @@ fn strip_comments(text: &str) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_json_content, strip_comments, write_if_changed};
+    use super::{
+        clean_json_content, get_jsonc_path, preserve_edits, strip_comments, write_if_changed,
+    };
     use std::fs::{self, FileTimes};
+    use std::io;
+    use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
     use tempfile::NamedTempFile;
 
@@ -335,6 +378,54 @@ mod tests {
 
         assert!(write_if_changed(file.path(), "after\n").unwrap());
         assert_eq!(fs::read_to_string(file.path()).unwrap(), "after\n");
+    }
+
+    #[test]
+    fn failed_save_preserves_the_edited_temp_file() {
+        let file = NamedTempFile::with_suffix(".jsonc").unwrap();
+        fs::write(file.path(), "{ invalid json").unwrap();
+        let path = file.path().to_path_buf();
+
+        let error = preserve_edits(
+            file.into_temp_path(),
+            io::Error::new(io::ErrorKind::InvalidData, "Invalid JSON"),
+        );
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("Edits preserved at"));
+        assert!(error.to_string().contains(&path.display().to_string()));
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{ invalid json");
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn jsonc_path_replaces_only_the_final_json_suffix() {
+        assert_eq!(
+            get_jsonc_path(Path::new("foo.json/settings.json")),
+            PathBuf::from("foo.json/settings.jsonc")
+        );
+        assert_eq!(
+            get_jsonc_path(Path::new("a.json.json")),
+            PathBuf::from("a.json.jsonc")
+        );
+        assert_eq!(
+            get_jsonc_path(Path::new("config")),
+            PathBuf::from("config.jsonc")
+        );
+        assert_eq!(get_jsonc_path(Path::new(".json")), PathBuf::from(".jsonc"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn jsonc_path_preserves_non_utf8_file_names() {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path = Path::new(OsStr::from_bytes(b"name-\xff.json"));
+        let jsonc_path = get_jsonc_path(path);
+
+        assert_eq!(jsonc_path.as_os_str().as_bytes(), b"name-\xff.jsonc");
     }
 
     #[test]
