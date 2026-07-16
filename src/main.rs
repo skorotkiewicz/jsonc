@@ -91,10 +91,10 @@ fn edit_json(json_path: &Path) -> io::Result<()> {
     let clean_json = clean_json_content(&new_content)?;
 
     // Write to .jsonc (With comments)
-    fs::write(&jsonc_path, &new_content)?;
+    let jsonc_changed = write_if_changed(&jsonc_path, &new_content)?;
 
     // Write to .json (Clean)
-    fs::write(json_path, clean_json)?;
+    let json_changed = write_if_changed(json_path, &clean_json)?;
 
     if is_new_file {
         println!(
@@ -102,15 +102,44 @@ fn edit_json(json_path: &Path) -> io::Result<()> {
             json_path.display(),
             jsonc_path.display()
         );
-    } else {
+    } else if json_changed && jsonc_changed {
         println!(
             "Saved {} (clean) and {} (with comments)",
             json_path.display(),
             jsonc_path.display()
         );
+    } else if json_changed {
+        println!(
+            "Saved {} (clean); {} unchanged",
+            json_path.display(),
+            jsonc_path.display()
+        );
+    } else if jsonc_changed {
+        println!(
+            "Saved {} (with comments); {} unchanged",
+            jsonc_path.display(),
+            json_path.display()
+        );
+    } else {
+        println!("No changes; files left untouched.");
     }
 
     Ok(())
+}
+
+fn write_if_changed(path: &Path, content: &str) -> io::Result<bool> {
+    match fs::read(path) {
+        Ok(existing) if existing == content.as_bytes() => Ok(false),
+        Ok(_) => {
+            fs::write(path, content)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::write(path, content)?;
+            Ok(true)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn clean_json_content(text: &str) -> io::Result<String> {
@@ -277,7 +306,36 @@ fn strip_comments(text: &str) -> io::Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clean_json_content, strip_comments};
+    use super::{clean_json_content, strip_comments, write_if_changed};
+    use std::fs::{self, FileTimes};
+    use std::time::{Duration, SystemTime};
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn unchanged_content_is_not_rewritten() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(file.path(), "unchanged\n").unwrap();
+        let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        file.as_file()
+            .set_times(FileTimes::new().set_modified(old_time))
+            .unwrap();
+        let modified_before = fs::metadata(file.path()).unwrap().modified().unwrap();
+
+        assert!(!write_if_changed(file.path(), "unchanged\n").unwrap());
+        assert_eq!(
+            fs::metadata(file.path()).unwrap().modified().unwrap(),
+            modified_before
+        );
+    }
+
+    #[test]
+    fn changed_content_is_written() {
+        let file = NamedTempFile::new().unwrap();
+        fs::write(file.path(), "before\n").unwrap();
+
+        assert!(write_if_changed(file.path(), "after\n").unwrap());
+        assert_eq!(fs::read_to_string(file.path()).unwrap(), "after\n");
+    }
 
     #[test]
     fn clean_json_removes_full_line_comments_without_blank_lines() {
